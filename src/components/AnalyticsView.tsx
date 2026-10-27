@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { usePOS } from '../context/POSContext';
+import type { Order } from '../types/pos';
 import { 
   BarChart3, 
   DollarSign, 
@@ -18,7 +19,12 @@ import {
   ChevronsRight,
   X,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Download,
+  Ban,
+  AlertTriangle,
+  ShieldAlert,
+  RotateCcw
 } from 'lucide-react';
 
 const getPageNumbers = (current: number, total: number): (number | string)[] => {
@@ -43,13 +49,22 @@ const getPageNumbers = (current: number, total: number): (number | string)[] => 
 };
 
 export const AnalyticsView: React.FC = () => {
-  const { orders, setActiveReceiptOrder, refreshData, dbConnected } = usePOS();
+  const { orders, setActiveReceiptOrder, refreshData, dbConnected, voidOrder } = usePOS();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [searchTerm, setSearchTerm] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'CASH' | 'PROMPTPAY' | 'CREDIT_CARD'>('ALL');
   const [layoutMode, setLayoutMode] = useState<'split' | 'full'>('split');
+
+  // Void / Refund Modal State
+  const [targetVoidOrder, setTargetVoidOrder] = useState<Order | null>(null);
+  const [voidType, setVoidType] = useState<'VOID' | 'REFUND'>('VOID');
+  const [voidReason, setVoidReason] = useState<string>('พนักงานคิดเงินผิดพลาด');
+  const [customReason, setCustomReason] = useState<string>('');
+  const [voidAdminPin, setVoidAdminPin] = useState<string>('');
+  const [voidError, setVoidError] = useState<string>('');
+  const [isVoidSubmitting, setIsVoidSubmitting] = useState(false);
 
   useEffect(() => {
     refreshData().catch(() => {});
@@ -64,14 +79,19 @@ export const AnalyticsView: React.FC = () => {
     }
   };
 
-  // Calculations
-  const totalRevenue = orders.reduce((sum, o) => sum + (o.netTotal || 0), 0);
-  const totalOrders = orders.length;
+  // Calculations: Separate active orders from voided/refunded orders
+  const activeOrders = useMemo(() => orders.filter(o => o.status !== 'VOIDED' && o.status !== 'REFUNDED'), [orders]);
+  const voidedOrders = useMemo(() => orders.filter(o => o.status === 'VOIDED' || o.status === 'REFUNDED'), [orders]);
+
+  const totalRevenue = activeOrders.reduce((sum, o) => sum + (o.netTotal || 0), 0);
+  const totalOrders = activeOrders.length;
+  const voidedTotal = voidedOrders.reduce((sum, o) => sum + (o.netTotal || 0), 0);
+  const voidedCount = voidedOrders.length;
   const avgTicket = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
-  // Total Cost of goods sold & Gross Profit
+  // Total Cost of goods sold & Gross Profit (only for valid completed orders)
   let totalCOGS = 0;
-  orders.forEach(order => {
+  activeOrders.forEach(order => {
     order.items?.forEach(item => {
       totalCOGS += (item.costPrice || 0) * (item.quantity || 1);
     });
@@ -80,21 +100,21 @@ export const AnalyticsView: React.FC = () => {
   const profitMargin = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
 
   // Payment Breakdown
-  const cashTotal = orders
+  const cashTotal = activeOrders
     .filter(o => o.paymentMethod === 'CASH')
     .reduce((sum, o) => sum + (o.netTotal || 0), 0);
 
-  const promptPayTotal = orders
+  const promptPayTotal = activeOrders
     .filter(o => o.paymentMethod === 'PROMPTPAY')
     .reduce((sum, o) => sum + (o.netTotal || 0), 0);
 
-  const cardTotal = orders
+  const cardTotal = activeOrders
     .filter(o => o.paymentMethod === 'CREDIT_CARD' || o.paymentMethod === 'TRANSFER')
     .reduce((sum, o) => sum + (o.netTotal || 0), 0);
 
-  // Top Selling Products Calculation
+  // Top Selling Products Calculation (active orders only)
   const productSalesMap: Record<string, { name: string; qty: number; revenue: number }> = {};
-  orders.forEach(order => {
+  activeOrders.forEach(order => {
     order.items?.forEach(item => {
       const pId = item.productId || item.name;
       if (!productSalesMap[pId]) {
@@ -104,6 +124,109 @@ export const AnalyticsView: React.FC = () => {
       productSalesMap[pId].revenue += (item.subtotal || 0);
     });
   });
+
+  // Handle Export to CSV (UTF-8 BOM for Microsoft Excel Thai compatibility)
+  const handleExportCSV = () => {
+    if (orders.length === 0) {
+      alert('ไม่มีข้อมูลบิลสำหรับส่งออก');
+      return;
+    }
+
+    const headers = [
+      'เลขที่บิล',
+      'วันที่',
+      'เวลา',
+      'สถานะบิล',
+      'แคชเชียร์',
+      'รหัสสมาชิก',
+      'ชื่อลูกค้า',
+      'เบอร์โทรศัพท์',
+      'จำนวนชิ้น',
+      'ยอดรวมก่อนลด (฿)',
+      'ส่วนลด (฿)',
+      'ภาษี VAT 7% (฿)',
+      'ยอดสุทธิ (฿)',
+      'ช่องทางชำระเงิน',
+      'แต้มที่ได้รับ',
+      'แต้มที่ใช้แลก',
+      'เหตุผลยกเลิก/คืนเงิน',
+      'ผู้อนุมัติยกเลิก'
+    ];
+
+    const rows = filteredOrders.map(order => {
+      const dateObj = new Date(order.timestamp);
+      const dateStr = dateObj.toLocaleDateString('th-TH');
+      const timeStr = dateObj.toLocaleTimeString('th-TH');
+      const totalQty = (order.items || []).reduce((s, i) => s + (i.quantity || 1), 0);
+      const statusText = order.status === 'VOIDED' ? 'ยกเลิก (Void)' : order.status === 'REFUNDED' ? 'คืนเงิน (Refund)' : 'ปกติ (Completed)';
+      const paymentText = order.paymentMethod === 'CASH' ? 'เงินสด' : order.paymentMethod === 'PROMPTPAY' ? 'พร้อมเพย์' : 'บัตรเครดิต';
+
+      return [
+        `"${order.orderNumber || ''}"`,
+        `"${dateStr}"`,
+        `"${timeStr}"`,
+        `"${statusText}"`,
+        `"${order.cashierName || ''}"`,
+        `"${order.customer?.memberCode || '-'}"`,
+        `"${order.customer ? `${order.customer.firstName} ${order.customer.lastName}` : 'ลูกค้าทั่วไป'}"`,
+        `"${order.customer?.phone || '-'}"`,
+        totalQty,
+        (order.subtotal || 0).toFixed(2),
+        (order.discount || 0).toFixed(2),
+        (order.tax || 0).toFixed(2),
+        (order.netTotal || 0).toFixed(2),
+        `"${paymentText}"`,
+        order.pointsEarned || 0,
+        order.pointsRedeemed || 0,
+        `"${order.voidReason || ''}"`,
+        `"${order.voidedBy || ''}"`
+      ].join(',');
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const today = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.setAttribute('download', `nexus_pos_sales_${today}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Handle Confirm Void / Refund
+  const handleConfirmVoid = async () => {
+    if (!targetVoidOrder) return;
+    setVoidError('');
+
+    if (!voidAdminPin.trim()) {
+      setVoidError('กรุณากรอกรหัส PIN ของแอดมิน');
+      return;
+    }
+
+    const finalReason = voidReason === 'อื่นๆ' ? customReason.trim() : voidReason;
+    if (!finalReason) {
+      setVoidError('กรุณาระบุเหตุผลในการทำรายการ');
+      return;
+    }
+
+    setIsVoidSubmitting(true);
+    try {
+      const res = await voidOrder(targetVoidOrder.id, finalReason, voidAdminPin, voidType);
+      if (res.success) {
+        setTargetVoidOrder(null);
+        setVoidAdminPin('');
+        setCustomReason('');
+        setVoidError('');
+      } else {
+        setVoidError(res.message || 'ไม่สามารถทำรายการได้');
+      }
+    } finally {
+      setIsVoidSubmitting(false);
+    }
+  };
 
   const topProducts = Object.values(productSalesMap)
     .sort((a, b) => b.qty - a.qty)
@@ -366,21 +489,27 @@ export const AnalyticsView: React.FC = () => {
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: 145 }}>เลขที่บิล</th>
-                <th style={{ width: 165 }}>วันที่ / เวลา</th>
+                <th style={{ width: 135 }}>เลขที่บิล</th>
+                <th style={{ width: 145 }}>วันที่ / เวลา</th>
                 <th>ลูกค้าสมาชิก</th>
+                <th style={{ textAlign: 'center', width: 90 }}>สถานะ</th>
                 <th>แคชเชียร์</th>
                 <th style={{ textAlign: 'center' }}>รายการ</th>
                 <th>ช่องทาง</th>
                 <th style={{ textAlign: 'right' }}>ยอดสุทธิ</th>
-                <th style={{ textAlign: 'center', width: 65 }}>พิมพ์</th>
+                <th style={{ textAlign: 'center', width: 75 }}>จัดการ</th>
               </tr>
             </thead>
             <tbody>
               {paginatedOrders.map((order, idx) => (
-                <tr key={`${order.id || order.orderNumber || 'order'}-${idx}`}>
+                <tr 
+                  key={`${order.id || order.orderNumber || 'order'}-${idx}`}
+                  style={{ opacity: (order.status === 'VOIDED' || order.status === 'REFUNDED') ? 0.65 : 1 }}
+                >
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.82rem' }}>
-                    {order.orderNumber || '-'}
+                    <div style={{ textDecoration: order.status === 'VOIDED' ? 'line-through' : 'none' }}>
+                      {order.orderNumber || '-'}
+                    </div>
                   </td>
                   <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                     {order.timestamp ? new Date(order.timestamp).toLocaleString('th-TH') : '-'}
@@ -391,14 +520,76 @@ export const AnalyticsView: React.FC = () => {
                         <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.84rem' }}>
                           {order.customer.firstName} {order.customer.lastName}
                         </div>
-                        <div style={{ marginTop: 2 }}>
+                        <div style={{ marginTop: 2, display: 'flex', gap: 4, alignItems: 'center' }}>
                           <span className="member-code-tag" style={{ fontSize: '0.72rem', padding: '1px 6px' }}>
                             {order.customer.memberCode}
                           </span>
+                          {(order.pointsEarned ?? 0) > 0 && (
+                            <span style={{ fontSize: '0.7rem', color: 'var(--cyan)' }}>
+                              +{order.pointsEarned} แต้ม
+                            </span>
+                          )}
                         </div>
                       </div>
                     ) : (
                       <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>ทั่วไป</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    {order.status === 'VOIDED' ? (
+                      <span 
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          padding: '2px 6px',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          color: 'var(--danger)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)'
+                        }}
+                        title={`เหตุผล: ${order.voidReason || '-'}\nผู้อนุมัติ: ${order.voidedBy || '-'}`}
+                      >
+                        <Ban size={11} />
+                        <span>ยกเลิก</span>
+                      </span>
+                    ) : order.status === 'REFUNDED' ? (
+                      <span 
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          padding: '2px 6px',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          background: 'rgba(245, 158, 11, 0.15)',
+                          color: '#f59e0b',
+                          border: '1px solid rgba(245, 158, 11, 0.3)'
+                        }}
+                        title={`เหตุผล: ${order.voidReason || '-'}\nผู้อนุมัติ: ${order.voidedBy || '-'}`}
+                      >
+                        <RotateCcw size={11} />
+                        <span>คืนเงิน</span>
+                      </span>
+                    ) : (
+                      <span 
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          padding: '2px 6px',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: '0.72rem',
+                          fontWeight: 600,
+                          background: 'rgba(16, 185, 129, 0.12)',
+                          color: 'var(--success)'
+                        }}
+                      >
+                        <span>ปกติ</span>
+                      </span>
                     )}
                   </td>
                   <td style={{ fontSize: '0.82rem' }}>{order.cashierName || 'พนักงาน'}</td>
@@ -433,18 +624,37 @@ export const AnalyticsView: React.FC = () => {
                         : 'บัตรเครดิต'}
                     </span>
                   </td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.86rem' }}>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700, color: (order.status === 'VOIDED' || order.status === 'REFUNDED') ? 'var(--text-muted)' : 'var(--text-primary)', fontSize: '0.86rem' }}>
                     ฿{Number(order.netTotal ?? 0).toFixed(2)}
                   </td>
                   <td style={{ textAlign: 'center' }}>
-                    <button
-                      className="icon-btn"
-                      style={{ margin: '0 auto', width: 28, height: 28 }}
-                      title="ดูและพิมพ์ใบเสร็จซ้ำ"
-                      onClick={() => setActiveReceiptOrder(order)}
-                    >
-                      <Printer size={14} />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                      <button
+                        className="icon-btn"
+                        style={{ width: 28, height: 28 }}
+                        title="ดูและพิมพ์ใบเสร็จซ้ำ"
+                        onClick={() => setActiveReceiptOrder(order)}
+                      >
+                        <Printer size={13} />
+                      </button>
+                      {order.status !== 'VOIDED' && order.status !== 'REFUNDED' && (
+                        <button
+                          className="icon-btn"
+                          style={{ width: 28, height: 28, color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+                          title="ยกเลิกบิล / คืนเงิน (ต้องใช้ PIN แอดมิน)"
+                          onClick={() => {
+                            setTargetVoidOrder(order);
+                            setVoidType('VOID');
+                            setVoidReason('พนักงานคิดเงินผิดพลาด');
+                            setCustomReason('');
+                            setVoidAdminPin('');
+                            setVoidError('');
+                          }}
+                        >
+                          <Ban size={13} />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -607,6 +817,15 @@ export const AnalyticsView: React.FC = () => {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button
+            className="btn-primary"
+            style={{ height: 34, padding: '0 14px', fontSize: '0.82rem', gap: 6, background: 'var(--primary-gradient)' }}
+            onClick={handleExportCSV}
+            title="ส่งออกประวัติการขายทั้งหมดเป็นไฟล์ Excel CSV (รองรับภาษาไทย)"
+          >
+            <Download size={15} />
+            <span>ส่งออก Excel</span>
+          </button>
+          <button
             className="btn-secondary"
             style={{ height: 34, padding: '0 14px', fontSize: '0.82rem' }}
             onClick={handleRefresh}
@@ -614,7 +833,7 @@ export const AnalyticsView: React.FC = () => {
             title="ดึงข้อมูลบิลขายล่าสุดจากฐานข้อมูล PostgreSQL"
           >
             <RefreshCw size={15} className={isRefreshing ? 'spin-icon' : ''} />
-            <span>{isRefreshing ? 'กำลังซิงค์...' : 'รีเฟรชข้อมูล'}</span>
+            <span>{isRefreshing ? 'กำลังซิงค์...' : 'รีเฟรช'}</span>
           </button>
           <button
             className="btn-secondary"
@@ -623,7 +842,7 @@ export const AnalyticsView: React.FC = () => {
             title="พิมพ์รายงานสรุปผลการดำเนินงาน"
           >
             <Printer size={15} />
-            <span>พิมพ์รายงาน</span>
+            <span>พิมพ์</span>
           </button>
         </div>
       </div>
@@ -632,19 +851,19 @@ export const AnalyticsView: React.FC = () => {
       <div 
         style={{ 
           display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', 
+          gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))', 
           gap: 12 
         }}
       >
         <div className="stat-card" style={{ padding: '10px 14px', gap: 2 }}>
           <div className="stat-title" style={{ fontSize: '0.78rem' }}>
-            <DollarSign size={15} color="var(--success)" /> ยอดขายรวมทั้งหมด
+            <DollarSign size={15} color="var(--success)" /> ยอดขายสุทธิ
           </div>
           <div className="stat-value" style={{ color: 'var(--success)', fontSize: '1.4rem' }}>
             ฿{totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-            คำสั่งซื้อทั้งหมด {totalOrders} บิล
+            คำสั่งซื้อสำเร็จ {totalOrders} บิล
           </div>
         </div>
 
@@ -662,7 +881,7 @@ export const AnalyticsView: React.FC = () => {
 
         <div className="stat-card" style={{ padding: '10px 14px', gap: 2 }}>
           <div className="stat-title" style={{ fontSize: '0.78rem' }}>
-            <ShoppingBag size={15} color="var(--primary)" /> จำนวนบิล / คำสั่งซื้อ
+            <ShoppingBag size={15} color="var(--primary)" /> จำนวนบิลสำเร็จ
           </div>
           <div className="stat-value" style={{ fontSize: '1.4rem' }}>
             {totalOrders} <span style={{ fontSize: '0.85rem', fontWeight: 400, color: 'var(--text-muted)' }}>บิล</span>
@@ -681,6 +900,18 @@ export const AnalyticsView: React.FC = () => {
           </div>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
             ต้นทุนสินค้าตัดจากสต็อก
+          </div>
+        </div>
+
+        <div className="stat-card" style={{ padding: '10px 14px', gap: 2 }}>
+          <div className="stat-title" style={{ fontSize: '0.78rem' }}>
+            <Ban size={15} color={voidedCount > 0 ? "var(--danger)" : "var(--text-muted)"} /> บิลยกเลิก/คืนเงิน
+          </div>
+          <div className="stat-value" style={{ color: voidedCount > 0 ? "var(--danger)" : "var(--text-muted)", fontSize: '1.4rem' }}>
+            ฿{voidedTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+            {voidedCount} บิล ({voidedCount > 0 ? 'คืนสต็อกแล้ว' : 'ไม่มี'})
           </div>
         </div>
       </div>
@@ -702,6 +933,199 @@ export const AnalyticsView: React.FC = () => {
           {/* Widgets Grid Below */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
             {renderSummaryWidgets()}
+          </div>
+        </div>
+      )}
+
+      {/* 3. Void / Refund Order Modal */}
+      {targetVoidOrder && (
+        <div className="modal-backdrop" style={{ zIndex: 1200 }}>
+          <div className="modal-card" style={{ maxWidth: 480 }}>
+            {/* Header */}
+            <div className="modal-header">
+              <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)' }}>
+                <ShieldAlert size={20} />
+                <span>ยืนยันการยกเลิกบิล / คืนเงิน (Admin Approval)</span>
+              </div>
+              <button 
+                className="icon-btn" 
+                onClick={() => setTargetVoidOrder(null)}
+                disabled={isVoidSubmitting}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* Target Order Summary */}
+              <div 
+                style={{ 
+                  padding: '12px 14px', 
+                  borderRadius: 'var(--radius-md)', 
+                  background: 'rgba(239, 68, 68, 0.08)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)' 
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                  <span>เลขที่บิล: <strong style={{ fontFamily: 'var(--font-mono)' }}>{targetVoidOrder.orderNumber}</strong></span>
+                  <span style={{ fontWeight: 700, color: 'var(--danger)', fontSize: '0.95rem' }}>
+                    ฿{Number(targetVoidOrder.netTotal).toFixed(2)}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                  แคชเชียร์: {targetVoidOrder.cashierName} • {targetVoidOrder.items?.length || 0} รายการ ({(targetVoidOrder.items || []).reduce((s, i) => s + (i.quantity || 1), 0)} ชิ้น)
+                </div>
+                {targetVoidOrder.customer && (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--cyan)', marginTop: 2 }}>
+                    ลูกค้า: {targetVoidOrder.customer.firstName} {targetVoidOrder.customer.lastName} ({targetVoidOrder.customer.memberCode})
+                  </div>
+                )}
+              </div>
+
+              {/* Mode Selection */}
+              <div>
+                <label className="form-label" style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                  ประเภทการทำรายการ
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setVoidType('VOID')}
+                    style={{
+                      padding: '10px',
+                      borderRadius: 'var(--radius-md)',
+                      border: voidType === 'VOID' ? '2px solid var(--danger)' : '1px solid var(--border-medium)',
+                      background: voidType === 'VOID' ? 'rgba(239, 68, 68, 0.15)' : 'var(--bg-card)',
+                      color: voidType === 'VOID' ? 'var(--danger)' : 'var(--text-secondary)',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      fontSize: '0.82rem'
+                    }}
+                  >
+                    🚫 ยกเลิกบิล (Void)
+                    <div style={{ fontSize: '0.7rem', fontWeight: 400, marginTop: 2 }}>คิดเงินผิด / ยกเลิกทันที</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setVoidType('REFUND')}
+                    style={{
+                      padding: '10px',
+                      borderRadius: 'var(--radius-md)',
+                      border: voidType === 'REFUND' ? '2px solid #f59e0b' : '1px solid var(--border-medium)',
+                      background: voidType === 'REFUND' ? 'rgba(245, 158, 11, 0.15)' : 'var(--bg-card)',
+                      color: voidType === 'REFUND' ? '#f59e0b' : 'var(--text-secondary)',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      fontSize: '0.82rem'
+                    }}
+                  >
+                    ↩️ คืนเงิน (Refund)
+                    <div style={{ fontSize: '0.7rem', fontWeight: 400, marginTop: 2 }}>ลูกค้านำสินค้ามาคืน</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Reason Selection */}
+              <div>
+                <label className="form-label" style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                  เหตุผลในการยกเลิก / คืนเงิน
+                </label>
+                <select
+                  className="barcode-input"
+                  style={{ width: '100%', height: 38, fontSize: '0.84rem' }}
+                  value={voidReason}
+                  onChange={e => setVoidReason(e.target.value)}
+                >
+                  <option value="พนักงานคิดเงินผิดพลาด">พนักงานคิดเงินผิดพลาด / สแกนเบิ้ล</option>
+                  <option value="ลูกค้าเปลี่ยนใจขอคืนสินค้า">ลูกค้าเปลี่ยนใจขอคืนสินค้า</option>
+                  <option value="สินค้าชำรุด / เสียหาย / มีตำหนิ">สินค้าชำรุด / เสียหาย / มีตำหนิ</option>
+                  <option value="ลูกค้าชำระเงินผิดช่องทาง">ลูกค้าชำระเงินผิดช่องทาง</option>
+                  <option value="อื่นๆ">อื่นๆ (ระบุเพิ่มเติมด้านล่าง)</option>
+                </select>
+
+                {voidReason === 'อื่นๆ' && (
+                  <input
+                    type="text"
+                    className="barcode-input"
+                    style={{ width: '100%', height: 36, marginTop: 6, fontSize: '0.82rem' }}
+                    placeholder="พิมพ์ระบุเหตุผล..."
+                    value={customReason}
+                    onChange={e => setCustomReason(e.target.value)}
+                  />
+                )}
+              </div>
+
+              {/* Admin PIN Verification (Crucial Security Check) */}
+              <div>
+                <label className="form-label" style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--warning)' }}>
+                  🔑 ใส่รหัส PIN ของผู้ดูแลระบบ (Admin PIN) เพื่ออนุมัติ
+                </label>
+                <input
+                  type="password"
+                  maxLength={6}
+                  autoFocus
+                  className="barcode-input"
+                  style={{ width: '100%', height: 42, fontSize: '1.2rem', textAlign: 'center', letterSpacing: 6 }}
+                  placeholder="••••"
+                  value={voidAdminPin}
+                  onChange={e => setVoidAdminPin(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleConfirmVoid();
+                  }}
+                />
+                <p style={{ margin: '4px 0 0 0', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  * บังคับใช้ PIN แอดมินเพื่อป้องกันพนักงานทุจริต (Demo PIN: 1234)
+                </p>
+              </div>
+
+              {/* Automatic Stock Restoration Notice */}
+              <div 
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: 8, 
+                  padding: '8px 12px', 
+                  background: 'rgba(59, 130, 246, 0.1)', 
+                  border: '1px solid rgba(59, 130, 246, 0.25)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.76rem',
+                  color: '#60a5fa'
+                }}
+              >
+                <AlertTriangle size={16} />
+                <span>ระบบจะคืนสต็อกสินค้าทั้งหมด {(targetVoidOrder.items || []).reduce((s, i) => s + (i.quantity || 1), 0)} ชิ้น กลับเข้าคลังสินค้าอัตโนมัติ</span>
+              </div>
+
+              {voidError && (
+                <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.15)', color: 'var(--danger)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: 600 }}>
+                  ⚠️ {voidError}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="modal-footer">
+              <button 
+                type="button" 
+                className="btn-secondary" 
+                style={{ height: 40 }}
+                onClick={() => setTargetVoidOrder(null)}
+                disabled={isVoidSubmitting}
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                className="btn-danger"
+                style={{ height: 40, padding: '0 20px', fontWeight: 700 }}
+                onClick={handleConfirmVoid}
+                disabled={isVoidSubmitting}
+              >
+                {isVoidSubmitting ? 'กำลังดำเนินการ...' : `ยืนยัน${voidType === 'REFUND' ? 'คืนเงิน' : 'ยกเลิกบิล'}`}
+              </button>
+            </div>
           </div>
         </div>
       )}

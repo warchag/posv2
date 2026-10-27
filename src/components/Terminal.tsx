@@ -17,7 +17,8 @@ import {
   UserPlus,
   X,
   Check,
-  Users
+  Users,
+  Star
 } from 'lucide-react';
 
 export const Terminal: React.FC = () => {
@@ -43,7 +44,10 @@ export const Terminal: React.FC = () => {
     customers,
     selectedCustomer,
     selectCustomer,
-    addCustomer
+    addCustomer,
+    redeemedPoints,
+    pointsDiscount,
+    setRedeemedPoints
   } = usePOS();
 
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -411,39 +415,101 @@ export const Terminal: React.FC = () => {
         {/* Customer Membership Row in Cart */}
         <div className="cart-customer-bar">
           {selectedCustomer ? (
-            <div className="cart-customer-card">
-              <div className="cart-customer-card-left">
-                <div className="cart-customer-avatar">
-                  <UserCheck size={16} />
+            <div>
+              <div className="cart-customer-card">
+                <div className="cart-customer-card-left">
+                  <div className="cart-customer-avatar">
+                    <UserCheck size={16} />
+                  </div>
+                  <div className="cart-customer-info">
+                    <div className="cart-customer-name">
+                      {selectedCustomer.firstName} {selectedCustomer.lastName}
+                    </div>
+                    <div className="cart-customer-meta">
+                      <span className="member-code-tag">{selectedCustomer.memberCode}</span>
+                      <span className="cart-customer-phone">{selectedCustomer.phone}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#f59e0b', fontWeight: 700, fontSize: '0.78rem' }}>
+                        <Star size={11} fill="#f59e0b" /> {selectedCustomer.points || 0} แต้ม
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="cart-customer-info">
-                  <div className="cart-customer-name">
-                    {selectedCustomer.firstName} {selectedCustomer.lastName}
-                  </div>
-                  <div className="cart-customer-meta">
-                    <span className="member-code-tag">{selectedCustomer.memberCode}</span>
-                    <span className="cart-customer-phone">{selectedCustomer.phone}</span>
-                  </div>
+                <div className="cart-customer-card-actions">
+                  <button
+                    type="button"
+                    className="cart-customer-action-btn"
+                    onClick={() => setIsCustomerModalOpen(true)}
+                    title="เปลี่ยนลูกค้าสมาชิก"
+                  >
+                    เปลี่ยน
+                  </button>
+                  <button
+                    type="button"
+                    className="cart-customer-action-btn danger"
+                    onClick={() => {
+                      selectCustomer(null);
+                      setRedeemedPoints(0);
+                    }}
+                    title="ยกเลิกการเลือกลูกค้า"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
               </div>
-              <div className="cart-customer-card-actions">
-                <button
-                  type="button"
-                  className="cart-customer-action-btn"
-                  onClick={() => setIsCustomerModalOpen(true)}
-                  title="เปลี่ยนลูกค้าสมาชิก"
-                >
-                  เปลี่ยน
-                </button>
-                <button
-                  type="button"
-                  className="cart-customer-action-btn danger"
-                  onClick={() => selectCustomer(null)}
-                  title="ยกเลิกการเลือกลูกค้า"
-                >
-                  <X size={14} />
-                </button>
-              </div>
+
+              {/* Point Redemption Bar */}
+              {(selectedCustomer.points || 0) >= 10 && cart.length > 0 && (
+                <div style={{
+                  marginTop: 6,
+                  padding: '6px 10px',
+                  background: 'rgba(245, 158, 11, 0.08)',
+                  border: '1px dashed rgba(245, 158, 11, 0.35)',
+                  borderRadius: 'var(--radius-sm)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: '0.8rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Star size={13} color="#f59e0b" fill="#f59e0b" />
+                    <div>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                        แลกแต้มลดเงิน
+                      </span>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginLeft: 4 }}>
+                        ({selectedCustomer.points || 0} แต้ม = ฿{Math.floor((selectedCustomer.points || 0) / 10)})
+                      </span>
+                    </div>
+                  </div>
+                  {redeemedPoints > 0 ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ height: 26, padding: '0 8px', fontSize: '0.72rem', color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+                      onClick={() => setRedeemedPoints(0)}
+                    >
+                      ยกเลิกแลก
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ height: 26, padding: '0 8px', fontSize: '0.72rem', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.4)', fontWeight: 600 }}
+                      onClick={() => {
+                        const maxPts = Math.min(selectedCustomer.points || 0, Math.floor(cartSubtotal * 10));
+                        const usable = Math.floor(maxPts / 10) * 10;
+                        if (usable <= 0) {
+                          alert('ยอดสินค้าในตะกร้ายังไม่พอสำหรับการใช้แต้ม');
+                          return;
+                        }
+                        setRedeemedPoints(usable);
+                      }}
+                    >
+                      ใช้ {Math.floor(Math.min(selectedCustomer.points || 0, Math.floor(cartSubtotal * 10)) / 10) * 10} แต้ม (-฿{Math.floor(Math.min(selectedCustomer.points || 0, Math.floor(cartSubtotal * 10)) / 10)})
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <button
@@ -554,6 +620,28 @@ export const Terminal: React.FC = () => {
               }}
             />
           </div>
+
+          {/* Points Discount Line */}
+          {pointsDiscount > 0 && (
+            <div className="summary-line" style={{ color: '#f59e0b' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Star size={13} fill="#f59e0b" /> ส่วนลดจากแต้มสะสม ({redeemedPoints} แต้ม)
+              </span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                -฿{pointsDiscount.toFixed(2)}
+              </span>
+            </div>
+          )}
+
+          {/* Anticipated Points Earned */}
+          {selectedCustomer && cartTotal > 0 && (
+            <div className="summary-line" style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              <span>แต้มที่จะได้รับเพิ่มบิลนี้:</span>
+              <span style={{ color: '#10b981', fontWeight: 700 }}>
+                +{Math.floor(cartTotal / 25)} แต้ม
+              </span>
+            </div>
+          )}
 
           {/* VAT Information */}
           {settings.vatRate > 0 && (
@@ -693,6 +781,9 @@ export const Terminal: React.FC = () => {
                                 <div className="customer-quick-meta">
                                   <span className="member-code-tag">{cust.memberCode}</span>
                                   <span>โทร. {cust.phone}</span>
+                                  <span style={{ color: '#f59e0b', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                                    <Star size={11} fill="#f59e0b" /> {cust.points || 0} แต้ม
+                                  </span>
                                 </div>
                               </div>
                             </div>

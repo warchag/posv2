@@ -268,6 +268,8 @@ app.get('/api/customers', async (_req, res) => {
         first_name as "firstName", 
         last_name as "lastName", 
         phone, 
+        points::int as points,
+        total_spent::float as "totalSpent",
         created_at as "createdAt"
       FROM customers 
       ORDER BY created_at DESC
@@ -281,13 +283,14 @@ app.get('/api/customers', async (_req, res) => {
 
 app.post('/api/customers', async (req, res) => {
   try {
-    const { id, memberCode, firstName, lastName, phone } = req.body;
+    const { id, memberCode, firstName, lastName, phone, points } = req.body;
     if (!memberCode?.trim() || !firstName?.trim() || !lastName?.trim() || !phone?.trim()) {
       return res.status(400).json({ error: 'กรุณากรอกข้อมูลสมาชิกให้ครบถ้วน' });
     }
 
     const finalId = id || `cust-${Date.now()}`;
     const cleanCode = memberCode.trim().toUpperCase();
+    const initialPoints = Math.max(0, parseInt(points, 10) || 0);
 
     const check = await pool.query('SELECT id FROM customers WHERE UPPER(member_code) = $1', [cleanCode]);
     if (check.rows.length > 0) {
@@ -295,10 +298,10 @@ app.post('/api/customers', async (req, res) => {
     }
 
     const result = await pool.query(`
-      INSERT INTO customers (id, member_code, first_name, last_name, phone)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, member_code as "memberCode", first_name as "firstName", last_name as "lastName", phone, created_at as "createdAt"
-    `, [finalId, cleanCode, firstName.trim(), lastName.trim(), phone.trim()]);
+      INSERT INTO customers (id, member_code, first_name, last_name, phone, points, total_spent)
+      VALUES ($1, $2, $3, $4, $5, $6, 0)
+      RETURNING id, member_code as "memberCode", first_name as "firstName", last_name as "lastName", phone, points, total_spent as "totalSpent", created_at as "createdAt"
+    `, [finalId, cleanCode, firstName.trim(), lastName.trim(), phone.trim(), initialPoints]);
 
     res.json({ success: true, customer: result.rows[0] });
   } catch (err: any) {
@@ -310,7 +313,7 @@ app.post('/api/customers', async (req, res) => {
 app.put('/api/customers/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { memberCode, firstName, lastName, phone } = req.body;
+    const { memberCode, firstName, lastName, phone, points } = req.body;
     const cleanCode = memberCode?.trim()?.toUpperCase();
 
     if (cleanCode) {
@@ -325,9 +328,10 @@ app.put('/api/customers/:id', async (req, res) => {
         member_code = COALESCE($1, member_code),
         first_name = COALESCE($2, first_name),
         last_name = COALESCE($3, last_name),
-        phone = COALESCE($4, phone)
-      WHERE id = $5
-    `, [cleanCode, firstName?.trim(), lastName?.trim(), phone?.trim(), id]);
+        phone = COALESCE($4, phone),
+        points = COALESCE($5, points)
+      WHERE id = $6
+    `, [cleanCode, firstName?.trim(), lastName?.trim(), phone?.trim(), points !== undefined ? Math.max(0, parseInt(points, 10)) : null, id]);
 
     res.json({ success: true });
   } catch (err: any) {
@@ -523,7 +527,7 @@ app.post('/api/users/login', loginLimiter, async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 5. Orders & Checkout API (SEC-05 & SEC-06 Hardened)
+// 5. Orders & Checkout API (SEC-05 & SEC-06 Hardened + Void & Points)
 // ----------------------------------------------------
 app.get('/api/orders', async (_req, res) => {
   try {
@@ -540,7 +544,13 @@ app.get('/api/orders', async (_req, res) => {
         change::float, 
         cashier_name as "cashierName", 
         customer, 
-        timestamp
+        timestamp,
+        COALESCE(status, 'COMPLETED') as status,
+        void_reason as "voidReason",
+        voided_at as "voidedAt",
+        voided_by as "voidedBy",
+        COALESCE(points_earned, 0)::int as "pointsEarned",
+        COALESCE(points_redeemed, 0)::int as "pointsRedeemed"
       FROM orders 
       ORDER BY timestamp DESC
     `);
@@ -557,7 +567,8 @@ app.post('/api/orders', async (req, res) => {
     const {
       id, orderNumber, items, discount,
       paymentMethod, cashReceived,
-      cashierName, customer, timestamp
+      cashierName, customer, timestamp,
+      pointsRedeemed
     } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -637,7 +648,7 @@ app.post('/api/orders', async (req, res) => {
       : parseFloat((taxableAmount + computedTax).toFixed(2));
 
     // 4. Validate cash received
-    const validMethods = ['CASH', 'PROMPTPAY', 'CREDIT_CARD'];
+    const validMethods = ['CASH', 'PROMPTPAY', 'CREDIT_CARD', 'TRANSFER'];
     const finalPaymentMethod = validMethods.includes(paymentMethod) ? paymentMethod : 'CASH';
     const finalCashReceived = parseFloat(cashReceived) || computedNetTotal;
 
@@ -652,27 +663,44 @@ app.post('/api/orders', async (req, res) => {
     const finalId = id || `order-${Date.now()}`;
     const finalOrderNumber = orderNumber || `POS-${new Date().toISOString().replace(/\D/g, '').slice(2, 14)}`;
 
+    // Loyalty points calculation: 25 Baht = 1 Point
+    const numRedeemed = Math.max(0, parseInt(pointsRedeemed, 10) || 0);
+    const pointsEarned = customer?.id ? Math.floor(computedNetTotal / 25) : 0;
+
     // 5. Insert verified Order record
     await client.query(`
       INSERT INTO orders (
         id, order_number, items, subtotal, discount, tax,
         net_total, payment_method, cash_received, change,
-        cashier_name, customer, timestamp
+        cashier_name, customer, timestamp, status, points_earned, points_redeemed
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'COMPLETED', $14, $15)
     `, [
       finalId, finalOrderNumber, JSON.stringify(verifiedItems), computedSubtotal, validDiscount, computedTax,
       computedNetTotal, finalPaymentMethod, finalCashReceived, computedChange,
-      cashierName || 'Cashier', customer ? JSON.stringify(customer) : null, timestamp || new Date().toISOString()
+      cashierName || 'Cashier', customer ? JSON.stringify(customer) : null, timestamp || new Date().toISOString(),
+      pointsEarned, numRedeemed
     ]);
 
-    // 6. Update Shift metrics with verified net total
+    // 6. Update Customer Loyalty Points & Spent
+    if (customer?.id) {
+      await client.query(`
+        UPDATE customers 
+        SET 
+          points = GREATEST(0, points - $1 + $2),
+          total_spent = total_spent + $3
+        WHERE id = $4
+      `, [numRedeemed, pointsEarned, computedNetTotal, customer.id]);
+    }
+
+    // 7. Update Shift metrics with verified net total
     await client.query(`
       UPDATE shifts
       SET 
         total_sales = total_sales + $1,
         cash_sales = CASE WHEN $2 = 'CASH' THEN cash_sales + $1 ELSE cash_sales END,
         prompt_pay_sales = CASE WHEN $2 = 'PROMPTPAY' THEN prompt_pay_sales + $1 ELSE prompt_pay_sales END,
+        credit_card_sales = CASE WHEN $2 = 'CREDIT_CARD' OR $2 = 'TRANSFER' THEN credit_card_sales + $1 ELSE credit_card_sales END,
         orders_count = orders_count + 1
       WHERE status = 'OPEN'
     `, [computedNetTotal, finalPaymentMethod]);
@@ -692,7 +720,10 @@ app.post('/api/orders', async (req, res) => {
       change: computedChange,
       cashierName: cashierName || 'Cashier',
       customer,
-      timestamp: timestamp || new Date().toISOString()
+      timestamp: timestamp || new Date().toISOString(),
+      status: 'COMPLETED' as const,
+      pointsEarned,
+      pointsRedeemed: numRedeemed
     };
 
     res.json({ success: true, order: createdOrder });
@@ -700,6 +731,145 @@ app.post('/api/orders', async (req, res) => {
     await client.query('ROLLBACK');
     console.error('Order creation error:', err.message);
     res.status(400).json({ error: err.message || 'ไม่สามารถบันทึกรายการคำสั่งซื้อได้' });
+  } finally {
+    client.release();
+  }
+});
+
+// ----------------------------------------------------
+// 5.1 Void / Refund Order API (Requires Admin PIN)
+// ----------------------------------------------------
+app.post('/api/orders/:id/void', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { adminPin, reason, voidType } = req.body;
+
+    if (!adminPin?.trim()) {
+      return res.status(400).json({ error: 'ต้องระบุรหัส PIN ของผู้ดูแลระบบ (Admin) เพื่ออนุมัติ' });
+    }
+
+    if (!reason?.trim()) {
+      return res.status(400).json({ error: 'กรุณาระบุเหตุผลในการยกเลิกบิลหรือคืนเงิน' });
+    }
+
+    // 1. Authenticate Admin PIN
+    const admins = await client.query("SELECT id, name, pin, role FROM users WHERE role = 'ADMIN' AND is_active = true");
+    let authorizedAdminName: string | null = null;
+    for (const admin of admins.rows) {
+      const match = admin.pin?.startsWith('$2')
+        ? bcrypt.compareSync(adminPin.trim(), admin.pin)
+        : admin.pin === adminPin.trim();
+      if (match) {
+        authorizedAdminName = admin.name;
+        break;
+      }
+    }
+
+    if (!authorizedAdminName) {
+      return res.status(403).json({ error: 'รหัส PIN ของแอดมินไม่ถูกต้อง ไม่อนุมัติการทำรายการ' });
+    }
+
+    await client.query('BEGIN');
+
+    // 2. Fetch and lock order
+    const orderRes = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [id]);
+    if (orderRes.rows.length === 0) {
+      throw new Error('ไม่พบบิลนี้ในระบบ');
+    }
+
+    const order = orderRes.rows[0];
+    if (order.status === 'VOIDED' || order.status === 'REFUNDED') {
+      throw new Error(`บิลนี้ถูกดำเนินการ (${order.status === 'VOIDED' ? 'ยกเลิก' : 'คืนเงิน'}) ไปแล้ว`);
+    }
+
+    const finalStatus = voidType === 'REFUND' ? 'REFUNDED' : 'VOIDED';
+
+    // 3. Restock inventory
+    const items = typeof order.items === 'string' ? JSON.parse(order.items) : order.items;
+    let restockedCount = 0;
+    for (const item of items) {
+      if (item.productId && item.quantity > 0) {
+        await client.query(`
+          UPDATE products
+          SET stock = stock + $1
+          WHERE id = $2
+        `, [item.quantity, item.productId]);
+        restockedCount += item.quantity;
+      }
+    }
+
+    // 4. Reverse customer loyalty points and spending
+    const custData = typeof order.customer === 'string' ? JSON.parse(order.customer) : order.customer;
+    if (custData?.id) {
+      const earned = parseInt(order.points_earned || '0', 10);
+      const redeemed = parseInt(order.points_redeemed || '0', 10);
+      const netTotal = parseFloat(order.net_total || 0);
+
+      await client.query(`
+        UPDATE customers
+        SET 
+          points = GREATEST(0, points - $1 + $2),
+          total_spent = GREATEST(0, total_spent - $3)
+        WHERE id = $4
+      `, [earned, redeemed, netTotal, custData.id]);
+    }
+
+    // 5. Update order status
+    const updatedOrderRes = await client.query(`
+      UPDATE orders
+      SET
+        status = $1,
+        void_reason = $2,
+        voided_at = NOW(),
+        voided_by = $3
+      WHERE id = $4
+      RETURNING 
+        id, order_number as "orderNumber", 
+        items, 
+        subtotal::float, 
+        discount::float, 
+        tax::float, 
+        net_total::float as "netTotal", 
+        payment_method as "paymentMethod", 
+        cash_received::float as "cashReceived", 
+        change::float, 
+        cashier_name as "cashierName", 
+        customer, 
+        timestamp,
+        status,
+        void_reason as "voidReason",
+        voided_at as "voidedAt",
+        voided_by as "voidedBy",
+        points_earned as "pointsEarned",
+        points_redeemed as "pointsRedeemed"
+    `, [finalStatus, reason.trim(), authorizedAdminName, id]);
+
+    // 6. Adjust open shift sales metrics
+    const netTotal = parseFloat(order.net_total || 0);
+    await client.query(`
+      UPDATE shifts
+      SET
+        total_sales = GREATEST(0, total_sales - $1),
+        cash_sales = CASE WHEN $2 = 'CASH' THEN GREATEST(0, cash_sales - $1) ELSE cash_sales END,
+        prompt_pay_sales = CASE WHEN $2 = 'PROMPTPAY' THEN GREATEST(0, prompt_pay_sales - $1) ELSE prompt_pay_sales END,
+        credit_card_sales = CASE WHEN $2 = 'CREDIT_CARD' OR $2 = 'TRANSFER' THEN GREATEST(0, credit_card_sales - $1) ELSE credit_card_sales END,
+        void_sales = void_sales + $1,
+        void_count = void_count + 1
+      WHERE status = 'OPEN'
+    `, [netTotal, order.payment_method]);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: `${finalStatus === 'REFUNDED' ? 'คืนเงินสำเร็จ' : 'ยกเลิกบิลสำเร็จ'} และคืนสินค้าเข้าสต็อก ${restockedCount} ชิ้นเรียบร้อยแล้ว`,
+      order: updatedOrderRes.rows[0]
+    });
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('Void order error:', err);
+    res.status(400).json({ error: err.message || 'ไม่สามารถยกเลิกบิลได้' });
   } finally {
     client.release();
   }
@@ -796,7 +966,7 @@ app.put('/api/settings', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 8. Shift API
+// 8. Shift API (Open / Close / Z-Report Accounting)
 // ----------------------------------------------------
 app.get('/api/shift', async (_req, res) => {
   try {
@@ -805,6 +975,10 @@ app.get('/api/shift', async (_req, res) => {
         id, cashier_name as "cashierName", start_time as "startTime", end_time as "endTime",
         starting_cash::float as "startingCash", total_sales::float as "totalSales",
         cash_sales::float as "cashSales", prompt_pay_sales::float as "promptPaySales",
+        credit_card_sales::float as "creditCardSales",
+        void_sales::float as "voidSales", void_count as "voidCount",
+        ending_cash::float as "endingCash", actual_cash::float as "actualCash",
+        cash_difference::float as "cashDifference", note,
         orders_count as "ordersCount", status
       FROM shifts 
       WHERE status = 'OPEN' 
@@ -830,6 +1004,50 @@ app.post('/api/shift/open', async (req, res) => {
   } catch (err: any) {
     console.error('POST /api/shift/open error:', err);
     res.status(500).json({ error: 'ไม่สามารถเปิดกะได้' });
+  }
+});
+
+app.post('/api/shift/close', async (req, res) => {
+  try {
+    const { actualCash, note } = req.body;
+    const actualCashNum = Math.max(0, parseFloat(actualCash) || 0);
+
+    const shiftRes = await pool.query("SELECT * FROM shifts WHERE status = 'OPEN' ORDER BY start_time DESC LIMIT 1");
+    if (shiftRes.rows.length === 0) {
+      return res.status(400).json({ error: 'ไม่พบกะการทำงานที่กำลังเปิดอยู่' });
+    }
+
+    const currentShift = shiftRes.rows[0];
+    const startingCash = parseFloat(currentShift.starting_cash || 0);
+    const cashSales = parseFloat(currentShift.cash_sales || 0);
+    const expectedCash = parseFloat((startingCash + cashSales).toFixed(2));
+    const cashDifference = parseFloat((actualCashNum - expectedCash).toFixed(2));
+
+    const updated = await pool.query(`
+      UPDATE shifts
+      SET
+        status = 'CLOSED',
+        end_time = $1,
+        ending_cash = $2,
+        actual_cash = $3,
+        cash_difference = $4,
+        note = $5
+      WHERE id = $6
+      RETURNING 
+        id, cashier_name as "cashierName", start_time as "startTime", end_time as "endTime",
+        starting_cash::float as "startingCash", total_sales::float as "totalSales",
+        cash_sales::float as "cashSales", prompt_pay_sales::float as "promptPaySales",
+        credit_card_sales::float as "creditCardSales",
+        void_sales::float as "voidSales", void_count as "voidCount",
+        ending_cash::float as "endingCash", actual_cash::float as "actualCash",
+        cash_difference::float as "cashDifference", note,
+        orders_count as "ordersCount", status
+    `, [new Date().toISOString(), expectedCash, actualCashNum, cashDifference, note?.trim() || '', currentShift.id]);
+
+    res.json({ success: true, shift: updated.rows[0] });
+  } catch (err: any) {
+    console.error('POST /api/shift/close error:', err);
+    res.status(500).json({ error: 'ไม่สามารถบันทึกการปิดกะได้' });
   }
 });
 

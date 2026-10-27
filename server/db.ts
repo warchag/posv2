@@ -154,10 +154,38 @@ export async function initDatabase() {
       );
     `);
 
+    // Schema Migrations (Non-destructive, auto-update existing DB tables)
+    // 1. Customers loyalty points & total spent
+    await client.query(`
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS points INT NOT NULL DEFAULT 0;
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS total_spent NUMERIC(10, 2) NOT NULL DEFAULT 0;
+    `);
+
+    // 2. Orders void / refund columns and loyalty points
+    await client.query(`
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'COMPLETED';
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS void_reason TEXT;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS voided_by VARCHAR(255);
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS points_earned INT DEFAULT 0;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS points_redeemed INT DEFAULT 0;
+    `);
+
+    // 3. Shift closing metrics, credit card sales & void accounting
+    await client.query(`
+      ALTER TABLE shifts ADD COLUMN IF NOT EXISTS credit_card_sales NUMERIC(10, 2) NOT NULL DEFAULT 0;
+      ALTER TABLE shifts ADD COLUMN IF NOT EXISTS void_sales NUMERIC(10, 2) NOT NULL DEFAULT 0;
+      ALTER TABLE shifts ADD COLUMN IF NOT EXISTS void_count INT NOT NULL DEFAULT 0;
+      ALTER TABLE shifts ADD COLUMN IF NOT EXISTS ending_cash NUMERIC(10, 2);
+      ALTER TABLE shifts ADD COLUMN IF NOT EXISTS actual_cash NUMERIC(10, 2);
+      ALTER TABLE shifts ADD COLUMN IF NOT EXISTS cash_difference NUMERIC(10, 2);
+      ALTER TABLE shifts ADD COLUMN IF NOT EXISTS note TEXT;
+    `);
+
     // Auto-seed default initial data if tables are empty
     await seedDefaultData(client);
 
-    console.log('✅ PostgreSQL database tables initialized successfully.');
+    console.log('✅ PostgreSQL database tables & schema migrations initialized successfully.');
   } catch (err) {
     console.error('❌ Failed to initialize database tables:', err);
     throw err;

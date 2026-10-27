@@ -12,7 +12,8 @@ import {
   X, 
   Check, 
   ShoppingCart,
-  AlertCircle
+  AlertCircle,
+  Star
 } from 'lucide-react';
 
 export const CustomersView: React.FC = () => {
@@ -33,7 +34,8 @@ export const CustomersView: React.FC = () => {
     memberCode: '',
     firstName: '',
     lastName: '',
-    phone: ''
+    phone: '',
+    points: 0
   });
 
   const [formError, setFormError] = useState('');
@@ -57,7 +59,8 @@ export const CustomersView: React.FC = () => {
       memberCode: `MB-${nextNum}`,
       firstName: '',
       lastName: '',
-      phone: ''
+      phone: '',
+      points: 0
     });
     setFormError('');
     setIsModalOpen(true);
@@ -69,7 +72,8 @@ export const CustomersView: React.FC = () => {
       memberCode: cust.memberCode,
       firstName: cust.firstName,
       lastName: cust.lastName,
-      phone: cust.phone
+      phone: cust.phone,
+      points: cust.points || 0
     });
     setFormError('');
     setIsModalOpen(true);
@@ -94,12 +98,15 @@ export const CustomersView: React.FC = () => {
       return;
     }
 
+    const numPoints = Math.max(0, parseInt(formData.points as any, 10) || 0);
+
     if (editingCustomer) {
       const res = updateCustomer(editingCustomer.id, {
         memberCode: formData.memberCode,
         firstName: formData.firstName,
         lastName: formData.lastName,
-        phone: formData.phone
+        phone: formData.phone,
+        points: numPoints
       });
       if (!res.success) {
         setFormError(res.message || 'เกิดข้อผิดพลาดในการแก้ไขข้อมูล');
@@ -110,7 +117,8 @@ export const CustomersView: React.FC = () => {
         memberCode: formData.memberCode,
         firstName: formData.firstName,
         lastName: formData.lastName,
-        phone: formData.phone
+        phone: formData.phone,
+        points: numPoints
       });
       if (!res.success) {
         setFormError(res.message || 'เกิดข้อผิดพลาดในการเพิ่มสมาชิก');
@@ -200,9 +208,11 @@ export const CustomersView: React.FC = () => {
         <table className="data-table">
           <thead>
             <tr>
-              <th style={{ width: 140 }}>รหัสลูกค้า</th>
+              <th style={{ width: 130 }}>รหัสลูกค้า</th>
               <th>ชื่อ - นามสกุล</th>
               <th>เบอร์ติดต่อ</th>
+              <th>คะแนนสะสม (Points)</th>
+              <th>ยอดซื้อสะสม</th>
               <th>วันที่ลงทะเบียน</th>
               <th style={{ textAlign: 'right' }}>การดำเนินการ</th>
             </tr>
@@ -210,7 +220,7 @@ export const CustomersView: React.FC = () => {
           <tbody>
             {filteredCustomers.length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                <td colSpan={7} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                   ไม่พบข้อมูลสมาชิกตามที่ค้นหา
                 </td>
               </tr>
@@ -233,6 +243,17 @@ export const CustomersView: React.FC = () => {
                       <Phone size={14} color="var(--primary)" />
                       <span style={{ fontFamily: 'var(--font-mono)' }}>{cust.phone || '-'}</span>
                     </div>
+                  </td>
+                  <td>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, color: '#f59e0b', background: 'rgba(245, 158, 11, 0.12)', padding: '3px 8px', borderRadius: 9999, fontSize: '0.82rem' }}>
+                      <Star size={12} fill="#f59e0b" />
+                      {cust.points || 0} แต้ม
+                    </span>
+                  </td>
+                  <td>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-main)' }}>
+                      ฿{Number(cust.totalSpent || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                    </span>
                   </td>
                   <td>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
@@ -366,6 +387,27 @@ export const CustomersView: React.FC = () => {
                   />
                   <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
                     สามารถใช้เบอร์นี้ค้นหาชื่อลูกค้าตอนยิงขายสินค้าหน้าร้านได้ทันที
+                  </span>
+                </div>
+
+                {/* Points */}
+                <div>
+                  <label style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                    แต้มสะสมปัจจุบัน (Points)
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="number"
+                      min="0"
+                      className="form-input"
+                      style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, paddingLeft: 36 }}
+                      value={formData.points}
+                      onChange={e => setFormData({ ...formData, points: Math.max(0, parseInt(e.target.value) || 0) })}
+                    />
+                    <Star size={16} color="#f59e0b" fill="#f59e0b" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
+                  </div>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+                    ระบบสะสมแต้มอัตโนมัติ 25 บาท = 1 แต้ม (10 แต้ม = ส่วนลด 1 บาท)
                   </span>
                 </div>
               </div>

@@ -12,7 +12,8 @@ import {
   Users,
   LogOut,
   ShoppingCart,
-  CreditCard
+  CreditCard,
+  Coins
 } from 'lucide-react';
 
 export const NavigationSidebar: React.FC = () => {
@@ -23,7 +24,8 @@ export const NavigationSidebar: React.FC = () => {
     setActiveTab, 
     settings,
     currentUser,
-    logout
+    logout,
+    setIsShiftModalOpen
   } = usePOS();
 
   // Close on Escape key press
@@ -206,6 +208,32 @@ export const NavigationSidebar: React.FC = () => {
 
         {/* Drawer Bottom Info */}
         <div className="sidebar-footer">
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{
+              width: '100%',
+              height: 40,
+              justifyContent: 'center',
+              gap: 8,
+              fontSize: '0.84rem',
+              fontWeight: 700,
+              color: 'var(--primary)',
+              borderColor: 'rgba(99, 102, 241, 0.4)',
+              background: 'rgba(99, 102, 241, 0.08)',
+              marginBottom: 10,
+              borderRadius: 'var(--radius-md)'
+            }}
+            onClick={() => {
+              setIsNavSidebarOpen(false);
+              setIsShiftModalOpen(true);
+            }}
+            title="เปิดหน้าต่างจัดการรอบกะ และพิมพ์ใบสรุปปิดกะ Z-Report"
+          >
+            <Coins size={16} />
+            <span>จัดการรอบกะ / ปิดกะ (Shift Z-Report)</span>
+          </button>
+
           <div className="sidebar-user-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

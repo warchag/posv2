@@ -13,6 +13,7 @@ import { ReceiptModal } from './components/ReceiptModal';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { NavigationSidebar } from './components/NavigationSidebar';
 import { CustomerDisplayView, CustomerDisplayModal } from './components/CustomerDisplayView';
+import { ShiftModal } from './components/ShiftModal';
 
 const MainLayout: React.FC = () => {
   const { activeTab, setActiveTab, currentUser } = usePOS();
@@ -47,6 +48,7 @@ const MainLayout: React.FC = () => {
       <ReceiptModal />
       <KeyboardShortcutsModal />
       <CustomerDisplayModal />
+      <ShiftModal />
     </div>
   );
 };

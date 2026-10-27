@@ -47,6 +47,12 @@ export interface Order {
   cashierName: string;
   customer?: Customer | null;
   timestamp: string;
+  status?: 'COMPLETED' | 'VOIDED' | 'REFUNDED';
+  voidReason?: string;
+  voidedAt?: string;
+  voidedBy?: string;
+  pointsEarned?: number;
+  pointsRedeemed?: number;
 }
 
 export interface Shift {
@@ -57,11 +63,16 @@ export interface Shift {
   startingCash: number;
   endingCash?: number;
   actualCash?: number;
+  cashDifference?: number;
   totalSales: number;
   cashSales: number;
   promptPaySales: number;
+  creditCardSales?: number;
+  voidSales?: number;
+  voidCount?: number;
   ordersCount: number;
   status: 'OPEN' | 'CLOSED';
+  note?: string;
 }
 
 export interface StoreSettings {
@@ -107,6 +118,8 @@ export interface Customer {
   lastName: string;
   phone: string;
   createdAt: string;
+  points?: number;
+  totalSpent?: number;
 }
 
 export type TabType = 'terminal' | 'inventory' | 'analytics' | 'customers' | 'users' | 'settings';

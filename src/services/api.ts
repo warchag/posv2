@@ -91,10 +91,15 @@ export const posApi = {
 
   // Orders & Sales
   getOrders: () => request<Order[]>('/orders'),
-  createOrder: (order: Order) => request<{ success: boolean; order: Order }>('/orders', {
+  createOrder: (order: Order & { pointsRedeemed?: number }) => request<{ success: boolean; order: Order }>('/orders', {
     method: 'POST',
     body: JSON.stringify(order)
   }),
+  voidOrder: (id: string, data: { adminPin: string; reason: string; voidType?: 'VOID' | 'REFUND' }) => 
+    request<{ success: boolean; message: string; order: Order }>(`/orders/${id}/void`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    }),
 
   // Held Bills
   getHeldBills: () => request<HeldBill[]>('/held-bills'),
@@ -118,6 +123,10 @@ export const posApi = {
   openShift: (cashierName: string, startingCash: number) => request<{ success: boolean; id: string }>('/shift/open', {
     method: 'POST',
     body: JSON.stringify({ cashierName, startingCash })
+  }),
+  closeShift: (data: { actualCash: number; note?: string }) => request<{ success: boolean; shift: Shift }>('/shift/close', {
+    method: 'POST',
+    body: JSON.stringify(data)
   }),
 
   // Reset Database

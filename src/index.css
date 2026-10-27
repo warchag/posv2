@@ -1164,10 +1164,12 @@ button, input, select, textarea {
     visibility: hidden;
   }
   #printable-receipt, #printable-receipt *,
+  #printable-zreport, #printable-zreport *,
   #settings-receipt-preview, #settings-receipt-preview * {
     visibility: visible;
   }
   #printable-receipt,
+  #printable-zreport,
   #settings-receipt-preview {
     position: absolute;
     left: 0;

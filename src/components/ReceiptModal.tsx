@@ -56,6 +56,55 @@ export const ReceiptModal: React.FC = () => {
               <div>เลขประจำตัวผู้เสียภาษี: {settings.taxId}</div>
             </div>
 
+            {/* Void / Refund Banner if applicable */}
+            {order.status === 'VOIDED' && (
+              <div style={{
+                margin: '8px 0',
+                padding: '6px',
+                border: '2px dashed #dc2626',
+                color: '#dc2626',
+                textAlign: 'center',
+                fontWeight: 800,
+                fontSize: '0.88rem'
+              }}>
+                *** บิลนี้ถูกยกเลิกแล้ว (VOIDED) ***
+                {order.voidReason && (
+                  <div style={{ fontSize: '0.72rem', fontWeight: 500, marginTop: 2 }}>
+                    เหตุผล: {order.voidReason}
+                  </div>
+                )}
+                {order.voidedBy && (
+                  <div style={{ fontSize: '0.7rem', fontWeight: 400 }}>
+                    ผู้อนุมัติ: {order.voidedBy}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {order.status === 'REFUNDED' && (
+              <div style={{
+                margin: '8px 0',
+                padding: '6px',
+                border: '2px dashed #d97706',
+                color: '#d97706',
+                textAlign: 'center',
+                fontWeight: 800,
+                fontSize: '0.88rem'
+              }}>
+                *** รายการคืนเงินแล้ว (REFUNDED) ***
+                {order.voidReason && (
+                  <div style={{ fontSize: '0.72rem', fontWeight: 500, marginTop: 2 }}>
+                    เหตุผล: {order.voidReason}
+                  </div>
+                )}
+                {order.voidedBy && (
+                  <div style={{ fontSize: '0.7rem', fontWeight: 400 }}>
+                    ผู้อนุมัติ: {order.voidedBy}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Bill Meta */}
             <div style={{ fontSize: '0.75rem', marginBottom: 6 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -110,8 +159,15 @@ export const ReceiptModal: React.FC = () => {
 
               {order.discount > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: '#dc2626' }}>
-                  <span>ส่วนลด:</span>
+                  <span>ส่วนลดท้ายบิล:</span>
                   <span>-฿{order.discount.toFixed(2)}</span>
+                </div>
+              )}
+
+              {(order.pointsRedeemed || 0) > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d97706' }}>
+                  <span>แลกแต้มส่วนลด ({order.pointsRedeemed} แต้ม):</span>
+                  <span>-฿{((order.pointsRedeemed || 0) / 10).toFixed(2)}</span>
                 </div>
               )}
 
@@ -151,6 +207,26 @@ export const ReceiptModal: React.FC = () => {
                 </>
               )}
             </div>
+
+            {/* Loyalty Points Summary for Member */}
+            {order.customer && (
+              <div style={{ marginTop: 8, padding: '6px 8px', borderTop: '1px dashed #9ca3af', fontSize: '0.74rem', background: '#f9fafb', borderRadius: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>แต้มที่ได้รับจากบิลนี้:</span>
+                  <strong style={{ color: '#059669' }}>+{order.pointsEarned || 0} แต้ม</strong>
+                </div>
+                {(order.pointsRedeemed || 0) > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: '#dc2626' }}>
+                    <span>แต้มที่ใช้แลกบิลนี้:</span>
+                    <strong>-{order.pointsRedeemed} แต้ม</strong>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #e5e7eb', marginTop: 3, paddingTop: 3 }}>
+                  <span>แต้มสะสมปัจจุบันของสมาชิก:</span>
+                  <strong>{order.customer.points || 0} แต้ม</strong>
+                </div>
+              </div>
+            )}
 
             {/* Footer */}
             <div className="receipt-footer">

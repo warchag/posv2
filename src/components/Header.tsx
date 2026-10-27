@@ -31,7 +31,8 @@ export const Header: React.FC = () => {
     logout,
     setIsCustomerDisplayOpen,
     dbConnected,
-    dbName
+    dbName,
+    setIsShiftModalOpen
   } = usePOS();
 
   const [currentTime, setCurrentTime] = useState<string>('');
@@ -177,9 +178,29 @@ export const Header: React.FC = () => {
         </div>
 
         {/* Live Shift Status */}
-        <div className="shift-badge">
-          <span className="shift-dot"></span>
-          <span>เปิดกะปกติ</span>
+        <div 
+          className="shift-badge"
+          onClick={() => setIsShiftModalOpen(true)}
+          style={{
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            background: shift.status === 'OPEN' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+            borderColor: shift.status === 'OPEN' ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)'
+          }}
+          title="คลิกเพื่อดูสรุปยอดกะ พิมพ์ใบสรุป Z-Report หรือบันทึกปิดกะ"
+        >
+          <span 
+            className="shift-dot" 
+            style={{ 
+              background: shift.status === 'OPEN' ? 'var(--success)' : 'var(--danger)',
+              boxShadow: shift.status === 'OPEN' ? '0 0 8px var(--success)' : 'none'
+            }}
+          />
+          <span style={{ fontWeight: 600 }}>
+            {shift.status === 'OPEN' 
+              ? `กะ: ${shift.cashierName} (฿${Number(shift.totalSales || 0).toLocaleString()})`
+              : 'ปิดกะอยู่ (คลิกเปิด)'}
+          </span>
         </div>
 
         {/* Real-time Clock */}

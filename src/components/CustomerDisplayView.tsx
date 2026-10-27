@@ -283,6 +283,9 @@ export const CustomerDisplayView: React.FC<CustomerDisplayViewProps> = ({
                 <div className="customer-member-chips">
                   <span className="member-code-tag">{customer.memberCode}</span>
                   <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>โทร. {customer.phone}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#f59e0b', fontWeight: 700, fontSize: '0.9rem', background: 'rgba(245, 158, 11, 0.12)', padding: '2px 8px', borderRadius: 9999 }}>
+                    ⭐️ {customer.points || 0} แต้มสะสม
+                  </span>
                 </div>
               </div>
             )}

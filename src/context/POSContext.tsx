@@ -74,6 +74,9 @@ interface POSContextType {
   clearCart: () => void;
   cartDiscount: number;
   setCartDiscount: (discount: number) => void;
+  redeemedPoints: number;
+  setRedeemedPoints: (points: number) => void;
+  pointsDiscount: number;
   
   // Held Bills
   holdCurrentBill: (note?: string) => boolean;
@@ -93,6 +96,7 @@ interface POSContextType {
   activeReceiptOrder: Order | null;
   setActiveReceiptOrder: (order: Order | null) => void;
   completeCheckout: (paymentMethod: PaymentMethod, cashReceived: number) => Order | null;
+  voidOrder: (orderId: string, reason: string, adminPin: string, voidType?: 'VOID' | 'REFUND') => Promise<{ success: boolean; message?: string }>;
   
   // Inventory actions
   addProduct: (product: Omit<Product, 'id'>) => void;
@@ -101,6 +105,12 @@ interface POSContextType {
   deleteProduct: (productId: string) => void;
   
   // Shift & Settings
+  openShift: (cashierName: string, startingCash: number) => Promise<{ success: boolean; message?: string }>;
+  closeShift: (actualCash: number, note?: string) => Promise<{ success: boolean; message?: string; shift?: Shift }>;
+  isShiftModalOpen: boolean;
+  setIsShiftModalOpen: (open: boolean) => void;
+  activeShiftReport: Shift | null;
+  setActiveShiftReport: (shift: Shift | null) => void;
   updateSettings: (newSettings: Partial<StoreSettings>) => void;
   resetToDefaultData: () => void;
   isShortcutsOpen: boolean;
@@ -161,6 +171,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartDiscount, setCartDiscount] = useState<number>(0);
+  const [redeemedPoints, setRedeemedPoints] = useState<number>(0);
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [activeShiftReport, setActiveShiftReport] = useState<Shift | null>(null);
 
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
@@ -633,8 +646,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Cart Calculations
+  const pointsDiscount = Math.floor(redeemedPoints / 10); // 10 Points = 1 Baht Discount
   const cartSubtotal = cart.reduce((sum, item) => sum + item.product.sellPrice * item.quantity, 0);
-  const cartAfterDiscount = Math.max(0, cartSubtotal - cartDiscount);
+  const cartAfterDiscount = Math.max(0, cartSubtotal - cartDiscount - pointsDiscount);
   
   const cartTax = settings.vatRate > 0
     ? settings.vatIncluded
@@ -653,7 +667,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const customerState = {
       cart,
       cartSubtotal,
-      cartDiscount,
+      cartDiscount: cartDiscount + pointsDiscount,
       cartTax,
       cartTotal,
       cartTotalItems,
@@ -676,6 +690,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     cart, 
     cartSubtotal, 
     cartDiscount, 
+    pointsDiscount,
     cartTax, 
     cartTotal, 
     cartTotalItems, 
@@ -760,6 +775,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const clearCart = () => {
     setCart([]);
     setCartDiscount(0);
+    setRedeemedPoints(0);
     setSelectedCustomer(null);
   };
 
@@ -820,13 +836,15 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const finalNetTotal = cartTotal;
     const finalChange = paymentMethod === 'CASH' ? Math.max(0, cashReceived - finalNetTotal) : 0;
+    const pointsEarned = selectedCustomer ? Math.floor(finalNetTotal / 25) : 0;
+    const finalDiscount = cartDiscount + pointsDiscount;
 
     const newOrder: Order = {
       id: 'order-' + Date.now(),
       orderNumber,
       items: orderItems,
       subtotal: cartSubtotal,
-      discount: cartDiscount,
+      discount: finalDiscount,
       tax: cartTax,
       netTotal: finalNetTotal,
       paymentMethod,
@@ -834,7 +852,10 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       change: finalChange,
       cashierName: currentUser ? currentUser.name : shift.cashierName,
       customer: selectedCustomer,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      status: 'COMPLETED',
+      pointsEarned,
+      pointsRedeemed: redeemedPoints
     };
 
     // Deduct stock levels locally
@@ -848,6 +869,15 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
     );
 
+    // Update member points locally
+    if (selectedCustomer) {
+      setCustomers(prev => prev.map(c => c.id === selectedCustomer.id ? {
+        ...c,
+        points: Math.max(0, (c.points || 0) - redeemedPoints + pointsEarned),
+        totalSpent: (c.totalSpent || 0) + finalNetTotal
+      } : c));
+    }
+
     // Save order history immediately
     const nextOrders = deduplicateOrders([newOrder, ...orders]);
     setOrders(nextOrders);
@@ -858,9 +888,10 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     // Call PostgreSQL API to persist order and deduct stock in database
-    posApi.createOrder(newOrder)
+    posApi.createOrder({ ...newOrder, pointsRedeemed: redeemedPoints })
       .then(() => {
-        posApi.getProducts().then(prods => setProducts(prods)).catch(() => {});
+        posApi.getProducts().then(prods => prods && setProducts(prods)).catch(() => {});
+        posApi.getCustomers().then(custs => custs && setCustomers(custs)).catch(() => {});
       })
       .catch(e => console.error('PostgreSQL createOrder error:', e));
 
@@ -870,6 +901,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       totalSales: prev.totalSales + finalNetTotal,
       cashSales: paymentMethod === 'CASH' ? prev.cashSales + finalNetTotal : prev.cashSales,
       promptPaySales: paymentMethod === 'PROMPTPAY' ? prev.promptPaySales + finalNetTotal : prev.promptPaySales,
+      creditCardSales: (paymentMethod === 'CREDIT_CARD' || paymentMethod === 'TRANSFER') ? (prev.creditCardSales || 0) + finalNetTotal : (prev.creditCardSales || 0),
       ordersCount: prev.ordersCount + 1
     }));
 
@@ -879,6 +911,63 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setActiveReceiptOrder(newOrder); // Open receipt modal
     sound.playSuccess();
     return newOrder;
+  };
+
+  // Void / Refund Order Action
+  const voidOrder = async (
+    orderId: string,
+    reason: string,
+    adminPin: string,
+    voidType: 'VOID' | 'REFUND' = 'VOID'
+  ): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const res = await posApi.voidOrder(orderId, { adminPin, reason, voidType });
+      if (res.success && res.order) {
+        setOrders(prev => prev.map(o => o.id === orderId ? res.order : o));
+        posApi.getProducts().then(prods => prods && setProducts(prods)).catch(() => {});
+        posApi.getCustomers().then(custs => custs && setCustomers(custs)).catch(() => {});
+        posApi.getShift().then(sh => sh && setShift(sh)).catch(() => {});
+        if (settings.enableSound) sound.playSuccess();
+        return { success: true, message: res.message };
+      }
+      return { success: false, message: 'ไม่สามารถยกเลิกบิลได้' };
+    } catch (err: any) {
+      if (settings.enableSound) sound.playError();
+      return { success: false, message: err?.message || 'เกิดข้อผิดพลาดในการยกเลิกบิล' };
+    }
+  };
+
+  // Shift Management Actions
+  const openShift = async (cashierName: string, startingCash: number): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const res = await posApi.openShift(cashierName, startingCash);
+      if (res.success) {
+        const sh = await posApi.getShift();
+        if (sh) setShift(sh);
+        if (settings.enableSound) sound.playSuccess();
+        return { success: true };
+      }
+      return { success: false, message: 'ไม่สามารถเปิดกะได้' };
+    } catch (err: any) {
+      if (settings.enableSound) sound.playError();
+      return { success: false, message: err?.message || 'ไม่สามารถเปิดกะได้' };
+    }
+  };
+
+  const closeShift = async (actualCash: number, note?: string): Promise<{ success: boolean; message?: string; shift?: Shift }> => {
+    try {
+      const res = await posApi.closeShift({ actualCash, note });
+      if (res.success && res.shift) {
+        setShift(res.shift);
+        setActiveShiftReport(res.shift);
+        if (settings.enableSound) sound.playSuccess();
+        return { success: true, shift: res.shift };
+      }
+      return { success: false, message: 'ไม่สามารถปิดกะได้' };
+    } catch (err: any) {
+      if (settings.enableSound) sound.playError();
+      return { success: false, message: err?.message || 'ไม่สามารถปิดกะได้' };
+    }
   };
 
   // Inventory Actions
@@ -984,6 +1073,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         clearCart,
         cartDiscount,
         setCartDiscount,
+        redeemedPoints,
+        setRedeemedPoints,
+        pointsDiscount,
         holdCurrentBill,
         resumeHeldBill,
         deleteHeldBill,
@@ -999,6 +1091,13 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         activeReceiptOrder,
         setActiveReceiptOrder,
         completeCheckout,
+        voidOrder,
+        openShift,
+        closeShift,
+        isShiftModalOpen,
+        setIsShiftModalOpen,
+        activeShiftReport,
+        setActiveShiftReport,
         addProduct,
         updateProduct,
         adjustStock,
